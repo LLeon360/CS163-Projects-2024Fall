@@ -1,24 +1,26 @@
 ---
 layout: post
 comments: true
-title: Image-to-Image Methods
+title: Image-to-Image Style Transfer
 author: Leon Liu, Rit Agarwal, Tony Chen, Tejas Kamtam
-date: 2024-12-01
+date: 2024-12-13
 ---
 
 > Recent advances in deep generative models have enabled unprecedented control over image synthesis and transformation, from translating between visual domains to precisely controlling spatial structure or appearance in generated images. This report traces a few seminal developments in architectures and training methodologies that have made these capabilities possible, from GAN-based approaches like CycleGAN to modern diffusion-based techniques that leverage pre-trained Stable Diffusion models to enable fine-grained control through image conditioning.
 
 <!--more-->
 {: class="table-of-content"}
-* 
 * [Introduction](#introduction)
 * [GANS](#gans)
   * [CycleGAN](#cyclegan)
+  * [StyleGAN](#stylegan)
 * [Diffusion-Based Methods](#diffusion-based-methods)
   * [Diffusion](#diffusion)
   * [Stable Diffusion](#stable-diffusion)
   * [ControlNet](#controlnet)
   * [Ctrl-X](#ctrl-x)
+* [References](#references)
+* [Implementation](#implementation)
 
 {:toc}
 
@@ -34,9 +36,82 @@ Beyond practical usage, image generation is probably the most popular usage of m
 
 The field has evolved from early approaches using Generative Adversarial Networks (GANs) like CycleGAN, which learned direct mappings between image domains, to more recent diffusion-based methods that offer greater control, stability, and generalization. Modern techniques like ControlNet and Ctrl-X build upon large pretrained diffusion models to enable precise spatial control over generation while maintaining high image quality. These advances have made image-to-image translation more practical and widely applicable.
 
-# GANS
+---
+
+# GANs
 Generative Adversarial Networks (GANs) introduced a novel approach to generative modeling through an adversarial game between two networks: a generator that creates fake samples and a discriminator that tries to distinguish real from fake samples. The generator learns to produce increasingly realistic images by trying to fool the discriminator, while the discriminator simultaneously improves its ability to detect generated images. This adversarial training dynamic helps GANs capture complex data distributions without explicitly modeling them.
 Early GANs showed impressive results for unconditional image generation but struggled with mode collapse (generating a limited variety of samples) and training instability. Various architectural and training improvements were proposed, leading to more stable variants like DCGAN and later StyleGAN. However, the challenge of controlled generation remained - how could we transform images between domains while preserving specific attributes?
+
+## StyleGAN
+StyleGAN more or less began the march towards high quality style transfer through a novel style-based generator architecture, enabling control over style micro and macro feature modulation. Inspired by style transfer techniques, StyleGAN separates high-level attributes (e.g., pose, identity) from fine stochastic details (e.g., freckles, hair textures) in 3 main levels: coarse, middle, and fine. Along with new noise modulation techniques, this innovative design not only enhances the quality of generated images but also introduces intuitive, scale-specific control of image generation.
+
+The core idea of StyleGAN is to treat the image generation process like style transfer, where "styles" govern the high-level attributes of an image. Traditional GAN generators embed latent vectors directly into the input layer of the network, acting as a black box that entangles features such as pose, lighting, and textures. StyleGAN decouples these factors by embedding the latent code into an intermediate latent space $$W$$, followed by the injection of styles at multiple layers of the synthesis network
+
+This architecture provides:
+- **Unsupervised** disentanglement of high-level attributes from stochastic features.
+- **Scale-specific control**, allowing edits to pose, structure, and fine details independently.
+- **Improved image quality**, with smoother latent space interpolation and better latent disentanglement.
+
+The paper presents these novel techniques through a GAN trained on the <a href="https://github.com/NVlabs/ffhq-dataset">FFHQ dataset</a> (Flickr-Faces-HQ dataset) which contains 52,000 high-quality $$512\times512$$ images of human faces.
+
+
+### Architecture
+
+### Traditional vs. Style-Based Generators
+
+In traditional GANs, the latent code $$z$$ directly influences the entire synthesis process, leading to entangled features. StyleGAN departs from this by introducing an intermediate latent space $$W$$ and a style-based generator.
+
+Key Components:
+1. Mapping Network
+    - An MLP with 8 fully connected layers. Outputs $$\omega$$, a disentangled representation of $$z$$
+
+2. Synthesis Network
+    - Begins with a constant learned tensor (4×4×5124×4×512) instead of a latent vector.
+    - Applies AdaIN to adjust feature maps at each layer.
+
+3. Noise Injection
+    - Injects uncorrelated noise after each convolution, enabling stochastic details.
+
+![StyleGAN Architecture Comparison]({{ '/assets/images/22/StyleGAN.png' | relative_url }})
+{: style="width: 800px; max-width: 100%;"}
+*StyleGAN Architecture Comparison [<a href="#references">9</a>]*
+
+
+Instead of feeding the latent vector $$z$$ directly into the generator, StyleGAN introduces:
+
+**Mapping Network**: An 8-layer MLP that transforms $$x \in Z$$ into an intermediate latent space $$w \in W$$. This disentangles the latent factors and removes dependency on the probability density of $$z$$
+
+**Adaptive Instance Normalization (AdaIN)**: Each convolution layer uses styles  to scale and shift feature maps, offering explicit control over attributes like pose, color, and texture. The AdaIN operation is defined as
+
+$$
+\text{AdaIn}(x_i, y)=y_{s,i}\frac{x_i-\mu}{\sigma(x_i)}+y_{b,i}
+$$
+
+![StyleGAN Noise Modulation]({{ '/assets/images/22/StyleGAN_noise.png' | relative_url }})
+{: style="width: 800px; max-width: 100%;"}
+
+*StyleGAN Noise Modulation [<a href="#references">9</a>]*
+
+In the image above, the authors show how the noise modulation via the AdaIN operation at every layer of the generator can be used to control the noise at each layer. The noise controls very fine grained details like freckles, hair placement, and background textures without affecting the high level features like pose, identity, and facial structure.
+
+**Scale-Specific Styles**: Different layers control different aspects of the image:
+Coarse layers influence pose and shape.
+Middle layers affect features like facial structure.
+Fine layers refine textures and details like hair or skin tone.
+
+
+![StyleGAN Style Modulation]({{ '/assets/images/22/StyleGAN_styles.png' | relative_url }})
+{: style="width: 800px; max-width: 100%;"}
+
+*StyleGAN Style Modulation Results [<a href="#references">9</a>]*
+
+For example, in the image above, the authors pass an input/base image from Source B and apply varying levels of "style" from images of Source A. The resulting images seem to inherit the style properties of their Source A counterpart overlayed on the base image from Source A. This introduces both structural adherence to the base image and controllable style properties of a style image. That too at multiple levels of feature prominence.
+
+### Limitations
+
+Although StyleGAN has proven to be a powerful tool for style transfer, it does have some limitations. Specifically, interpretability is a continued concern. Although style and noise modulation are available at multiple levels and scale with features, the process is still random as the style and noise modulation is done by tuning Gaussian noise. Without a specific text-based guidance system (or other specifiable method), it is mostly up to trial and error to achieve specific style properties during style transfer. Additionally, the model tends to be heavily biased toward the dataset demographic representation. There stands to be improvement in high quality, diverse human face datasets
+
+---
 
 ## CycleGAN
 
@@ -45,7 +120,7 @@ CycleGAN addresses the unpaired image-to-image translation problem: learning to 
 ![CycleGAN Examples]({{ '/assets/images/22/CycleGANExamples.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*Example translations from domain to domain creates by CycleGAN [6]* 
+*Example translations from domain to domain creates by CycleGAN [<a href="#references">6</a>]* 
 
 The key insight is that while we may not have direct pairs showing how each image should be translated, we can enforce cycle consistency translating an image to the target domain and back should recover the original image, and thus we have training data where the output (after passing it back through both models) target is the input.
 
@@ -55,7 +130,7 @@ The key insight is that while we may not have direct pairs showing how each imag
 ![CycleGAN]({{ '/assets/images/22/CycleGAN.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*CycleGAN Architecture* [6]
+*CycleGAN Architecture [<a href="#references">6</a>]*
 
 The architecture consists of two generator-discriminator pairs:
 
@@ -90,6 +165,8 @@ Here, $$L_{GAN}$$ is the same minimax adversarial loss where each generator must
 ### Limitations
 Because of this paired cycle relationship, CycleGAN learns a specific pair of domain to domain translations that it is trained on and thus is not a flexible method to handle translations between a diverse set of domains. Additionally, GAN architectures have become less popular as diffusion-based methods like Stable Diffusion have arisen. 
 
+---
+
 # Diffusion-Based Methods
 
 ## Diffusion 
@@ -108,7 +185,7 @@ $$
 q(\mathbf{x}_t|\mathbf{x}_{t-1}) = \mathcal{N}(\mathbf{x}_t; \sqrt{1-\beta_t}\mathbf{x}_{t-1}, \beta_t\mathbf{I})
 $$
 
-where $\beta_t$ is a variance schedule that controls the noise level at each step. After adding noise over many many timesteps, the final $x_T$ is a Gaussian distribution.
+where $$\beta_t$$ is a variance schedule that controls the noise level at each step. After adding noise over many many timesteps, the final $$x_T$$ is a Gaussian distribution.
 
 This process is a Markov process in that each step depends only on the previous state. This allows us to arbitrarily sample any timestep directly:
 
@@ -116,7 +193,11 @@ $$
 q(\mathbf{x}_t|\mathbf{x}_0) = \mathcal{N}(\mathbf{x}_t; \sqrt{\alpha_t}\mathbf{x}_0, (1-\alpha_t)\mathbf{I})
 $$
 
-where $$\alpha_t = \prod_{s=1}^t (1-\beta_s)$$. This is achieved through the reparameterization:
+$$
+\alpha_t = \prod_{s=1}^t (1-\beta_s)
+$$
+
+This is achieved through the reparameterization:
 
 $$
 \mathbf{x}_t = \sqrt{\alpha_t}\mathbf{x}_0 + \sqrt{1-\alpha_t}\boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(0, \mathbf{I})
@@ -267,7 +348,7 @@ The approximated original image is derived from the equation above but then the 
 
 ### Training and Simplified U-Net Model
 
-The backbone model used to predict the noise is a U-Net which resembles an encoder-decoder model with additional skip connections (kind of similar to residual connections) concatenating outputs of encoder blocks to decoder blocks of matching dimensions such that the model diagram resembles a "U" [2]. 
+The backbone model used to predict the noise is a U-Net which resembles an encoder-decoder model with additional skip connections (kind of similar to residual connections) concatenating outputs of encoder blocks to decoder blocks of matching dimensions such that the model diagram resembles a "U" [<a href="#references">2</a>]. 
 
 The model is also conditioned on the current timestep which helps inform how "noisy" the input image will be.
 An addition made to the standard U-Net is a time embedding which converts the low frequency timestep information to high frequency sinusoidal embeddings. These embeddings are projected into the output channel dimension for each block using a linear layer and added to each spatial location / pixel.
@@ -277,19 +358,21 @@ During training, random timesteps are sampled and the ground truth images are no
 ![Diagram of a U-Net]({{ '/assets/images/22/Unet.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*U-Net Model Diagram [2]*
+*U-Net Model Diagram [<a href="#references">2</a>]*
 
 There are a few more additions made to the U-Net used in Stable Diffusion such as self-attention and cross-attention which we'll go in the next section, but this is the general idea.
 
+---
+
 ## Stable Diffusion
 
-While the basic diffusion framework is powerful, operating in pixel space presents significant computational challenges. Stable Diffusion [3] introduces several key innovations that make diffusion models more practical while maintaining generation quality.
+While the basic diffusion framework is powerful, operating in pixel space presents significant computational challenges. Stable Diffusion [<a href="#references">3</a>] introduces several key innovations that make diffusion models more practical while maintaining generation quality.
 
 
 ![Stable Diffusion (LDM)]({{ '/assets/images/22/StableDiffusion.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*Diagram of Stable Diffusion / Latent Diffusion's overall process [3]*
+*Diagram of Stable Diffusion / Latent Diffusion's overall process [<a href="#references">3</a>]*
 
 ### Latent Space Diffusion
 
@@ -312,7 +395,7 @@ On a high level, the goal of the VAE is to learn a good efficient representation
 
 ### U-Net
 
-The neural backbone of the Stable Diffusion model is a U-Net [2], which has also been used in Diffusion in pixel space. Similar to diffusion, the objective is to accurately predict the noise added, except the noise is added to the latent instead of the image directly. 
+The neural backbone of the Stable Diffusion model is a U-Net [<a href="#references">2</a>], which has also been used in Diffusion in pixel space. Similar to diffusion, the objective is to accurately predict the noise added, except the noise is added to the latent instead of the image directly. 
 
 The U-Net model is conditioned with the timestep as before.
 
@@ -342,7 +425,7 @@ CLIP's text encoder is based on a transformer architecture that converts a textu
 ![Stable Diffusion Results]({{ '/assets/images/22/SDResults.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*Sample outputs from model conditioned on user prompts [3]* 
+*Sample outputs from model conditioned on user prompts [<a href="#references">3</a>]* 
 
 ### Training Details
 
@@ -393,6 +476,8 @@ The limitations around spatial control, motivated the development of methods lik
 
 Additionally, it's through methods that add spatial conditioning like ControlNet and Ctrl-X that it is possible to extract structural information from an input image to create a new stylized image that retains the original image's structure, thus performing style transfer.
 
+---
+
 ## ControlNet
 
 ControlNet introduces a principled approach for adding spatial conditioning to large pretrained text-to-image diffusion models. The key insight is to preserve the capabilities of the original model while learning how to incorporate structural conditions through a trainable copy of the model backbone. This enables pixel-perfect control over generation while maintaining the high quality and semantic understanding of the base model.
@@ -402,13 +487,13 @@ The intuition behind ControlNet is that we want to "control" the generation proc
 ![ControlNetExample]({{ '/assets/images/22/ControlNetExample.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*ControlNet Samples* [4]
+*ControlNet Samples* [<a href="#references">4</a>]
 
 ### Adapter
 ![ControlNet]({{ '/assets/images/22/ControlNetFull.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*ControlNet on the encoder blocks and middle block of Stable Diffusion U-Net* [4].
+*ControlNet on the encoder blocks and middle block of Stable Diffusion U-Net* [<a href="#references">4</a>].
 
 The pretrained U-Net backbone in the Stable Diffusion model is kept the same and the weights are frozen during the training of the adapter model. This prevents the loss / or retraining of the model's original image generation capabilities since the primary goal is to add in additional structural information without harming the quality of the model.
 
@@ -465,6 +550,8 @@ becomes significantly more difficult as these pairings cannot be easily automate
 
 These limitations motivate the development of more efficient, training-free approaches that can work with arbitrary structural conditions without requiring paired training data. Methods like Ctrl-X specifically address these challenges by eliminating the need for additional training while reducing the computational overhead during inference.
 
+---
+
 ## Ctrl-X
 
 Compared to approaches that use adapters, Ctrl-X takes a significant shift in approach to controllable image generation by eliminating the need for additional training or optimization steps. It is also guidance-free (an approach not covered in this report), but essentially doesn't require inference time backpropagation (defining losses to steer generation, e.g.g moving the centroid of an object). Unlike ControlNet which requires paired training data and adds computational overhead, Ctrl-X achieves structure and appearance control by leveraging the inherent capabilities of pretrained diffusion models through attention between intermediate features produced during the denoising process of a structure image, appearance image, and output image.
@@ -472,7 +559,7 @@ Compared to approaches that use adapters, Ctrl-X takes a significant shift in ap
 ![Ctrl-X Samples]({{ '/assets/images/22/CtrlXExamples.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*Sample generations from Ctrl-X* [5]
+*Sample generations from Ctrl-X* [<a href="#references">5</a>]
 
 ### Training-Free
 
@@ -507,7 +594,7 @@ For any given denoising timestep t, the process follows several key steps:
 ![CtrlXPipeline]({{ '/assets/images/22/CtrlXPipeline.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*Ctrl-X Pipeline* [5]
+*Ctrl-X Pipeline* [<a href="#references">5</a>]
 
 #### Feature Injection
 
@@ -516,7 +603,7 @@ The first step in Ctrl-X's control mechanism is feature injection from the struc
 ![FeatureInjection]({{ '/assets/images/22/FeatureInjection.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*Ctrl-X Feature Injection, taken from Ctrl-X video presentation by Jordan Lin* [8]
+*Ctrl-X Feature Injection, taken from Ctrl-X video presentation by Jordan Lin* [<a href="#references">8</a>]
 
 This direct feature injection preserves structural information, but unlike ControlNet, it happens without additional network overhead since we're using features from the base model itself. The injection serves as a foundation for maintaining structural alignment while allowing appearance modification through subsequent steps.
 
@@ -525,14 +612,14 @@ One reason why this works is that even in early diffusion timesteps with very no
 ![CtrlXEarlyDiffusionFeatures]({{ '/assets/images/22/CtrlXEarlyDiffusionFeatures.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*The authors of the paper visualize the early diffusion features using real, generated, and condition images and feed the noised image through the model at high timesteps (early when sampling) and extract the features of the SDXL model and visualize the top 3 principal components. This illustrates how even at early sampling stages, the structual features already hold decent structural information which allows for semantic correspondence between two images via self-attention* [5].
+*The authors of the paper visualize the early diffusion features using real, generated, and condition images and feed the noised image through the model at high timesteps (early when sampling) and extract the features of the SDXL model and visualize the top 3 principal components. This illustrates how even at early sampling stages, the structual features already hold decent structural information which allows for semantic correspondence between two images via self-attention* [<a href="#references">5</a>].
 
 #### Spatially Aware Appearance Transfer
 
 ![SpatiallyAwareAppearanceTransfer]({{ '/assets/images/22/SpatiallyAwareAppearanceTransfer.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*Ctrl-X Spatially Aware Appearance Transfer, taken from Ctrl-X video presentation by Jordan Lin* [8]
+*Ctrl-X Spatially Aware Appearance Transfer, taken from Ctrl-X video presentation by Jordan Lin* [<a href="#references">8</a>]
 
 Then to perform spatially-aware appearance transfer:
 
@@ -547,7 +634,7 @@ The resulting attention matrix encodes how different parts of the output image s
 ![SelfAttentionSemanticCorrespondence]({{ '/assets/images/22/SelfAttentionSemanticCorrespondence.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*Example semantic correspondence extracted from cross-image attention* [7]
+*Example semantic correspondence extracted from cross-image attention* [<a href="#references">7</a>]
 
 This semantic correspondence is then used to transfer appearance statistics. The attention weights determine how to combine appearance feature statistics spatially:
 - A mean feature map is computed as a weighted average of appearance features
@@ -567,29 +654,94 @@ After appearance transfer, Ctrl-X performs an additional self-attention injectio
 ![SelfAttentionInjection]({{ '/assets/images/22/SelfAttentionInjection.jpg' | relative_url }})
 {: style="width: 800px; max-width: 100%;"}
 
-*Ctrl-X Self-Attention Injection, taken from Ctrl-X video presentation by Jordan Lin* [8]
+*Ctrl-X Self-Attention Injection, taken from Ctrl-X video presentation by Jordan Lin* [<a href="#references">8</a>]
 
 This final step helps maintain structural coherence after appearance transfer by leveraging the base model's learned understanding of spatial relationships. Notably, the self-attention mechanism in the plain SD model is intended for enforcing self-consistency, but since this step is injecting the attention maps from the structural image, this step is enforcing structural consistency between the output image and the structural image rather than self-coherence.
 
 The complete pipeline integrates these steps at each diffusion timestep, allowing the model to maintain both structural and appearance control throughout the generation process. Importantly, this is achieved without any additional training or optimization, making it immediately applicable to any pretrained diffusion model while being computationally efficient compared to methods like ControlNet. Also because these steps are modular, which layers these steps are applied to are hyperparameters that can be tuned.
 
-## References 
+---
 
-[1] "What are Diffusion Models?" by Lilian Weng https://lilianweng.github.io/posts/2021-07-11-diffusion-models/
+# References 
 
-[2] Ronneberger, O., Fischer, P., & Brox, T. (2015). U-Net: Convolutional Networks for Biomedical Image Segmentation. ArXiv. https://arxiv.org/abs/1505.04597
+[1] "What are Diffusion Models?" by Lilian Weng <a href="https://lilianweng.github.io/posts/2021-07-11-diffusion-models/" target="_blank">https://lilianweng.github.io/posts/2021-07-11-diffusion-models/</a>
 
-[3] Rombach, R., Blattmann, A., Lorenz, D., Esser, P., & Ommer, B. (2021). High-Resolution Image Synthesis with Latent Diffusion Models. ArXiv. https://arxiv.org/abs/2112.10752
+[2] Ronneberger, O., Fischer, P., & Brox, T. (2015). *U-Net: Convolutional Networks for Biomedical Image Segmentation*. ArXiv. <a href="https://arxiv.org/abs/1505.04597" target="_blank">https://arxiv.org/abs/1505.04597</a>
 
-[4] Zhang, L., Rao, A., & Agrawala, M. (2023). Adding Conditional Control to Text-to-Image Diffusion Models. ArXiv. https://arxiv.org/abs/2302.05543
+[3] Rombach, R., Blattmann, A., Lorenz, D., Esser, P., & Ommer, B. (2021). *High-Resolution Image Synthesis with Latent Diffusion Models*. ArXiv. <a href="https://arxiv.org/abs/2112.10752" target="_blank">https://arxiv.org/abs/2112.10752</a>
 
-[5] Lin, K. H., Mo, S., Klingher, B., Mu, F., & Zhou, B. (2024). Ctrl-X: Controlling Structure and Appearance for Text-To-Image Generation Without Guidance. ArXiv. https://arxiv.org/abs/2406.07540
+[4] Zhang, L., Rao, A., & Agrawala, M. (2023). *Adding Conditional Control to Text-to-Image Diffusion Models*. ArXiv. <a href="https://arxiv.org/abs/2302.05543" target="_blank">https://arxiv.org/abs/2302.05543</a>
 
-[6] Zhu, J., Park, T., Isola, P., & Efros, A. A. (2017). Unpaired Image-to-Image Translation using Cycle-Consistent Adversarial Networks. ArXiv. https://arxiv.org/abs/1703.10593
+[5] Lin, K. H., Mo, S., Klingher, B., Mu, F., & Zhou, B. (2024). *Ctrl-X: Controlling Structure and Appearance for Text-To-Image Generation Without Guidance*. ArXiv. <a href="https://arxiv.org/abs/2406.07540" target="_blank">https://arxiv.org/abs/2406.07540</a>
 
-[7] Alaluf, Y., Garibi, D., & Patashnik, O. (2023). Cross-Image Attention for Zero-Shot Appearance Transfer. ArXiv. https://arxiv.org/abs/2311.03335
+[6] Zhu, J., Park, T., Isola, P., & Efros, A. A. (2017). *Unpaired Image-to-Image Translation using Cycle-Consistent Adversarial Networks*. ArXiv. <a href="https://arxiv.org/abs/1703.10593" target="_blank">https://arxiv.org/abs/1703.10593</a>
 
-[8] "CS163 - Ctrl-X: Controlling Structure and Appearance for Text-To-Image Generation - Jordan Lin" https://www.youtube.com/watch?v=ycxkdJnaiuQ
+[7] Alaluf, Y., Garibi, D., & Patashnik, O. (2023). *Cross-Image Attention for Zero-Shot Appearance Transfer*. ArXiv. <a href="https://arxiv.org/abs/2311.03335" target="_blank">https://arxiv.org/abs/2311.03335</a>
+
+[8] "CS163 - Ctrl-X: Controlling Structure and Appearance for Text-To-Image Generation - Jordan Lin" <a href="https://www.youtube.com/watch?v=ycxkdJnaiuQ" target="_blank">https://www.youtube.com/watch?v=ycxkdJnaiuQ</a>
+
+[9] Karras, T., Laine, S., & Aila, T. (2019). *A Style-Based Generator Architecture for Generative Adversarial Networks*. <a href="https://arxiv.org/abs/1812.04948" target="_blank">https://arxiv.org/abs/1812.04948</a>
 
 ---
 
+# Implementation
+
+In this <a href="https://drive.google.com/file/d/1O5pwErojNv6SCF4rVleA7H4mB74eCRLF/view?usp=sharing" target="_blank">Python notebook</a>, we offer a custom implmentation of Image2Image style transfer using ControlNet on the base Stable Diffusion model. We use the HuggingFace Diffusers library to facilitate the construction of an I2I pipeline.
+
+From the HuggingFace Diffusers library, we import the `StableDiffusionControlNetImg2ImgPipeline`, `ControlNetModel`, and `UniPCMultistepScheduler`. The StableDiffusion version is `v1.5`, and the ControlNetModel version is `v11f1p`. We quantize to 16-bit precision and use safetensors for the ControlNetModel. We also set the noise scheduler to UniPCMultistepScheduler to decrease memory utilization while maintaining speed. We use the StableDiffusion base model and the ControlNetModel both quantized to 16-bit floating point precision.
+
+```python
+from diffusers import StableDiffusionControlNetImg2ImgPipeline, ControlNetModel, UniPCMultistepScheduler
+import torch
+
+controlnet = ControlNetModel.from_pretrained("lllyasviel/control_v11f1p_sd15_depth", torch_dtype=torch.float16, use_safetensors=True)
+pipe = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
+    "stable-diffusion-v1-5/stable-diffusion-v1-5", controlnet=controlnet, torch_dtype=torch.float16, use_safetensors=True
+)
+
+pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
+pipe.enable_model_cpu_offload()
+```
+
+We use the depth-estimation pipeline from HuggingFace's Transformers library to generate a depth map. This is done by passing the image through the depth-estimation pipeline using the `depth-anything` model and extracting the predicted depth map. We then convert the depth map to a tensor and normalize it to the range $$[0, 1]$$. This depth map is used to condition the ControlNetModel.
+
+```python
+import torch
+import numpy as np
+
+from transformers import pipeline
+from diffusers.utils import load_image, make_image_grid
+
+image = load_image(
+    "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/controlnet-img2img.jpg"
+)
+
+depth_estimator = pipeline(task="depth-estimation", model="LiheYoung/depth-anything-base-hf")
+depth_map = depth_estimator("https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/controlnet-img2img.jpg")["predicted_depth"]
+print(depth_map.shape)
+depth_map = np.array(depth_map)
+depth_map = depth_map[:, :, None]
+depth_map = np.concatenate([depth_map, depth_map, depth_map], axis=2)
+depth_map = torch.from_numpy(depth_map).float() / 255.0
+depth_map = depth_map.permute(2, 0, 1)
+depth_map = depth_map.unsqueeze(0).half().to("cuda")
+```
+
+We pass the image and depth map through the pipeline. The image is the original image, and the depth map is the depth map estimation generated by the depth-anything model. We also pass in the guiding text prompt "lego harry potter and ron". The results are pretty good, but blur and errors may be attributed to quantization to fp16, the fast noise scheduler for memory optimization, poor depth estimateion, the text prompt, or the base model's generative quality.
+```python
+output = pipe(
+    "lego harry potter and ron", image=image, control_image=depth_map,
+).images[0]
+make_image_grid([image, output], rows=1, cols=2)
+```
+
+We pass the image and depth map through the pipeline. We also pass in the guiding text prompt "lego harry potter and ron". The resulting image is shown below. The left image is the original image, and the right image is the generated image.
+
+The results are pretty good, but blur and errors may be attributed to quantization to fp16, the fast noise scheduler for memory optimization, poor depth estimation, the text prompt, or the base model's generative quality. 
+
+![StableDiffusionControlNetI2I]({{ '/assets/images/22/Implementation.png' | relative_url }})
+{: style="width: 800px; max-width: 100%;"}
+
+*ControlNet Image-to-Image Style Transfer using Stable Diffusion v1.5*
+
+---
